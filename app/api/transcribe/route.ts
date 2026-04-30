@@ -1,19 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import OpenAI from "openai";
+import Groq, { toFile } from "groq-sdk";
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+// ─── Groq client (singleton) ──────────────────────────────────────────────────
+const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
-const ALLOWED_TYPES = new Set([
-  "audio/mpeg",
-  "audio/mp4",
-  "audio/wav",
-  "audio/webm",
-  "audio/x-m4a",
-  "audio/ogg",
-  // Some browsers report m4a as this:
-  "audio/mp4; codecs=mp4a.40.2",
-]);
-
+// ─── Constants ────────────────────────────────────────────────────────────────
+// Groq's Whisper endpoint supports the same formats as OpenAI Whisper
 const MAX_BYTES = 25 * 1024 * 1024; // 25 MB — Whisper limit
 
 export async function POST(req: NextRequest) {
@@ -32,7 +24,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "No audio file provided." }, { status: 400 });
   }
 
-  // --- Validate MIME type (allow any audio/* via prefix) ---
+  // --- Validate MIME type ---
   if (!file.type.startsWith("audio/")) {
     return NextResponse.json(
       { error: `Unsupported file type: "${file.type}". Please upload an audio file.` },
@@ -48,23 +40,32 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // --- Call OpenAI Whisper ---
+  // --- Call Groq Whisper (whisper-large-v3) ---
   try {
-    const response = await openai.audio.transcriptions.create({
-      file: file,          // OpenAI SDK accepts Web API File directly
-      model: "whisper-1",
+    // Convert Web File to Node Buffer to satisfy Groq SDK in Next.js environments
+    const buffer = Buffer.from(await file.arrayBuffer());
+    const groqFile = await toFile(buffer, file.name, { type: file.type });
+
+    const response = await groq.audio.transcriptions.create({
+      file: groqFile,
+      model: "whisper-large-v3",
       response_format: "verbose_json",
     });
 
+    // The 'verbose_json' format returns extra fields like duration and language,
+    // but the SDK's default return type only guarantees the 'text' property.
+    // We cast it to any to safely extract these additional fields.
+    const verboseRes = response as any;
+
     return NextResponse.json({
       transcript: response.text,
-      duration: response.duration ?? null,
-      language: response.language ?? null,
+      duration: verboseRes.duration ?? null,
+      language: verboseRes.language ?? null,
     });
   } catch (err) {
-    console.error("[/api/transcribe] OpenAI error:", err);
+    console.error("[/api/transcribe] Groq error:", err);
     return NextResponse.json(
-      { error: "Transcription failed. Please check your API key and try again." },
+      { error: "Transcription failed. Please check your GROQ_API_KEY and try again." },
       { status: 500 }
     );
   }
