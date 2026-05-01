@@ -1,12 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import Groq, { toFile } from "groq-sdk";
+import { AssemblyAI } from "assemblyai";
 
-// ─── Groq client (singleton) ──────────────────────────────────────────────────
-const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+// ─── AssemblyAI client (singleton) ────────────────────────────────────────────
+const client = new AssemblyAI({ apiKey: process.env.ASSEMBLYAI_API_KEY! });
 
 // ─── Constants ────────────────────────────────────────────────────────────────
-// Groq's Whisper endpoint supports the same formats as OpenAI Whisper
-const MAX_BYTES = 25 * 1024 * 1024; // 25 MB — Whisper limit
+const MAX_BYTES = 100 * 1024 * 1024; // 100 MB limit
 
 export async function POST(req: NextRequest) {
   let formData: FormData;
@@ -25,7 +24,7 @@ export async function POST(req: NextRequest) {
   }
 
   // --- Validate MIME type ---
-  if (!file.type.startsWith("audio/")) {
+  if (!file.type.startsWith("audio/") && !file.type.startsWith("video/")) {
     return NextResponse.json(
       { error: `Unsupported file type: "${file.type}". Please upload an audio file.` },
       { status: 400 }
@@ -35,37 +34,42 @@ export async function POST(req: NextRequest) {
   // --- Validate file size ---
   if (file.size > MAX_BYTES) {
     return NextResponse.json(
-      { error: `File too large (${(file.size / 1024 / 1024).toFixed(1)} MB). Maximum is 25 MB.` },
+      { error: `File too large (${(file.size / 1024 / 1024).toFixed(1)} MB). Maximum is 100 MB.` },
       { status: 413 }
     );
   }
 
-  // --- Call Groq Whisper (whisper-large-v3) ---
+  // --- Call AssemblyAI (with speaker diarization) ---
   try {
-    // Convert Web File to Node Buffer to satisfy Groq SDK in Next.js environments
+    // Convert Web File to Buffer for upload
     const buffer = Buffer.from(await file.arrayBuffer());
-    const groqFile = await toFile(buffer, file.name, { type: file.type });
 
-    const response = await groq.audio.transcriptions.create({
-      file: groqFile,
-      model: "whisper-large-v3",
-      response_format: "verbose_json",
+    // AssemblyAI SDK handles upload + polling automatically
+    const transcript = await client.transcripts.transcribe({
+      audio: buffer,
+      speaker_labels: true,        // Speaker A, Speaker B, etc.
+      language_code: "en_us",      // Default to English to avoid ALD routing errors
+      speech_models: ["universal-3-pro", "universal-2"], // Explicitly supply allowed models
     });
 
-    // The 'verbose_json' format returns extra fields like duration and language,
-    // but the SDK's default return type only guarantees the 'text' property.
-    // We cast it to any to safely extract these additional fields.
-    const verboseRes = response as any;
+    if (transcript.status === "error") {
+      console.error("[/api/transcribe] AssemblyAI error:", transcript.error);
+      return NextResponse.json(
+        { error: "Transcription failed. Please try again." },
+        { status: 500 }
+      );
+    }
 
     return NextResponse.json({
-      transcript: response.text,
-      duration: verboseRes.duration ?? null,
-      language: verboseRes.language ?? null,
+      transcript: transcript.text ?? "",
+      utterances: transcript.utterances ?? [],  // Speaker-labeled segments
+      duration: transcript.audio_duration ?? null,
+      language: transcript.language_code ?? null,
     });
   } catch (err) {
-    console.error("[/api/transcribe] Groq error:", err);
+    console.error("[/api/transcribe] AssemblyAI error:", err);
     return NextResponse.json(
-      { error: "Transcription failed. Please check your GROQ_API_KEY and try again." },
+      { error: "Transcription failed. Please check your ASSEMBLYAI_API_KEY and try again." },
       { status: 500 }
     );
   }

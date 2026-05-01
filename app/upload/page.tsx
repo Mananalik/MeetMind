@@ -8,6 +8,13 @@ interface SummaryOutput {
   actionItems: string[];
 }
 
+interface Utterance {
+  speaker: string;
+  text: string;
+  start: number;
+  end: number;
+}
+
 const ACCEPTED_TYPES = ["audio/mpeg", "audio/mp4", "audio/wav", "audio/webm", "audio/x-m4a", "audio/ogg"];
 const MAX_SIZE_MB = 25;
 
@@ -17,6 +24,15 @@ export default function Home() {
   const [transcript, setTranscript] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  const [activeTab, setActiveTab] = useState<"upload" | "record">("upload");
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingTime, setRecordingTime] = useState(0);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<BlobPart[]>([]);
+  const timerIntervalRef = useRef<NodeJS.Timeout | null>(null);
+
+  const [utterances, setUtterances] = useState<Utterance[]>([]);
 
 // ─── Runtime shape validator ─────────────────────────────────────────────────
 // Coerces unknown API response into a safe SummaryOutput rather than a blind
@@ -43,7 +59,7 @@ function parseSummary(data: unknown): SummaryOutput | null {
   const [summaryError, setSummaryError] = useState<string | null>(null);
 
   // ── Summarize ────────────────────────────────────────────────
-  async function callSummarize(text: string) {
+  async function callSummarize(text: string, currentUtts: Utterance[], currentFile: File | null) {
     setSummarizing(true);
     setSummaryError(null);
     setSummary(null);
@@ -74,6 +90,24 @@ function parseSummary(data: unknown): SummaryOutput | null {
         return;
       }
       setSummary(parsed);
+
+      try {
+        const { saveMeeting, generateTitle } = await import("@/lib/db");
+        const title = generateTitle(text, currentFile?.name || "recording.webm");
+        await saveMeeting({
+          title,
+          fileName: currentFile?.name || "recording.webm",
+          date: new Date().toISOString(),
+          duration: null,
+          language: "en_us",
+          transcript: text,
+          utterances: currentUtts,
+          summary: parsed,
+          createdAt: new Date(),
+        });
+      } catch (err) {
+        console.error("Failed to save meeting to database:", err);
+      }
     } catch {
       setSummaryError("Network error while summarizing. Please check your connection.");
     } finally {
@@ -81,10 +115,117 @@ function parseSummary(data: unknown): SummaryOutput | null {
     }
   }
 
+  async function startRecording() {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mediaRecorder = new MediaRecorder(stream);
+      mediaRecorderRef.current = mediaRecorder;
+      audioChunksRef.current = [];
+
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
+
+      mediaRecorder.onstop = () => {
+        const audioBlob = new Blob(audioChunksRef.current, { type: "audio/webm" });
+        const audioFile = new File([audioBlob], "recording.webm", { type: "audio/webm" });
+        setFile(audioFile);
+        stream.getTracks().forEach((track) => track.stop());
+      };
+
+      mediaRecorder.start();
+      setIsRecording(true);
+      setRecordingTime(0);
+      setFile(null);
+      setError(null);
+      setTranscript(null);
+      setUtterances([]);
+      setSummary(null);
+      setSummaryError(null);
+
+      timerIntervalRef.current = setInterval(() => {
+        setRecordingTime((prev) => prev + 1);
+      }, 1000);
+    } catch (err) {
+      setError("Microphone access denied or unavailable.");
+    }
+  }
+
+  function stopRecording() {
+    if (mediaRecorderRef.current && isRecording) {
+      mediaRecorderRef.current.stop();
+      setIsRecording(false);
+      if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
+    }
+  }
+
+  function formatTime(seconds: number) {
+    const m = Math.floor(seconds / 60).toString().padStart(2, "0");
+    const s = (seconds % 60).toString().padStart(2, "0");
+    return `${m}:${s}`;
+  }
+
+  function formatTimestamp(ms: number) {
+    const seconds = Math.floor(ms / 1000);
+    const m = Math.floor(seconds / 60).toString().padStart(2, "0");
+    const s = (seconds % 60).toString().padStart(2, "0");
+    return `${m}:${s}`;
+  }
+
+  function handleExportMarkdown() {
+    if (!summary) return null;
+    
+    let md = `# Meeting Summary\n\n`;
+    md += `## TL;DR\n${summary.tldr}\n\n`;
+    
+    if (summary.keyPoints && summary.keyPoints.length > 0) {
+      md += `## Key Points\n`;
+      summary.keyPoints.forEach((kp, i) => md += `${i + 1}. ${kp}\n`);
+      md += `\n`;
+    }
+    
+    if (summary.actionItems && summary.actionItems.length > 0) {
+      md += `## Action Items\n`;
+      summary.actionItems.forEach(ai => md += `- [ ] ${ai}\n`);
+      md += `\n`;
+    }
+
+    if (transcript) {
+      md += `## Transcript\n${transcript}\n`;
+    }
+
+    return md;
+  }
+
+  function copyToClipboard() {
+    const md = handleExportMarkdown();
+    if (md) {
+      navigator.clipboard.writeText(md);
+      alert("Markdown copied to clipboard!");
+    }
+  }
+
+  function downloadMarkdown() {
+    const md = handleExportMarkdown();
+    if (!md) return;
+    const blob = new Blob([md], { type: "text/markdown" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `meeting_summary_${new Date().toISOString().slice(0,10)}.md`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
   function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const selected = e.target.files?.[0] ?? null;
     setError(null);
     setTranscript(null);
+    setUtterances([]);
     setSummary(null);
     setSummaryError(null);
 
@@ -109,10 +250,12 @@ function parseSummary(data: unknown): SummaryOutput | null {
     setLoading(true);
     setError(null);
     setTranscript(null);
+    setUtterances([]);
     setSummary(null);
     setSummaryError(null);
 
     let transcriptText: string | null = null;
+    let extractedUtterances: Utterance[] = [];
 
     try {
       const formData = new FormData();
@@ -130,7 +273,9 @@ function parseSummary(data: unknown): SummaryOutput | null {
         return;
       }
       transcriptText = data.transcript ?? "No transcript returned";
+      extractedUtterances = data.utterances ?? [];
       setTranscript(transcriptText);
+      setUtterances(extractedUtterances);
     } catch {
       setError("Network error. Please check your connection and try again.");
     } finally {
@@ -139,17 +284,19 @@ function parseSummary(data: unknown): SummaryOutput | null {
 
     // Chain summarization only if transcription succeeded
     if (transcriptText) {
-      await callSummarize(transcriptText);
+      await callSummarize(transcriptText, extractedUtterances, file);
     }
   }
 
   function handleReset() {
     setFile(null);
     setTranscript(null);
+    setUtterances([]);
     setError(null);
     setSummary(null);
     setSummaryError(null);
     if (inputRef.current) inputRef.current.value = "";
+    if (isRecording) stopRecording();
   }
 
   return (
@@ -160,51 +307,98 @@ function parseSummary(data: unknown): SummaryOutput | null {
         <p className="mt-2 text-sm text-zinc-400">Upload a meeting recording and get an instant transcript.</p>
       </div>
 
-      {/* Upload Card */}
+      {/* Upload/Record Card */}
       <div className="w-full max-w-xl bg-zinc-900 border border-zinc-800 rounded-2xl p-8 shadow-xl">
 
-        {/* File Input */}
-        <div className="mb-5">
-          <label
-            htmlFor="audio-file"
-            className="block text-xs font-medium text-zinc-400 uppercase tracking-widest mb-2"
+        {/* Tabs */}
+        <div className="flex bg-zinc-950/50 rounded-lg p-1 mb-6 border border-zinc-800">
+          <button
+            onClick={() => { setActiveTab("upload"); handleReset(); }}
+            className={`flex-1 py-2 text-sm font-medium rounded-md transition-colors ${activeTab === "upload" ? "bg-zinc-800 text-white shadow" : "text-zinc-500 hover:text-zinc-300"}`}
           >
-            Audio File
-          </label>
-          <div
-            className="flex items-center gap-3 w-full rounded-lg border border-zinc-700 bg-zinc-800 px-4 py-3 cursor-pointer hover:border-zinc-500 transition-colors"
-            onClick={() => inputRef.current?.click()}
+            Upload File
+          </button>
+          <button
+            onClick={() => { setActiveTab("record"); handleReset(); }}
+            className={`flex-1 py-2 text-sm font-medium rounded-md transition-colors ${activeTab === "record" ? "bg-zinc-800 text-white shadow" : "text-zinc-500 hover:text-zinc-300"}`}
           >
-            {/* Icon */}
-            <svg className="w-5 h-5 text-zinc-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 18.75a6 6 0 006-6v-1.5m-6 7.5a6 6 0 01-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 01-3-3V4.5a3 3 0 116 0v8.25a3 3 0 01-3 3z" />
-            </svg>
+            Record Audio
+          </button>
+        </div>
 
-            <span className={`text-sm truncate ${file ? "text-zinc-100" : "text-zinc-500"}`}>
-              {file ? file.name : "Click to select an audio file…"}
-            </span>
+        {activeTab === "upload" ? (
+          <div className="mb-5">
+            <label
+              htmlFor="audio-file"
+              className="block text-xs font-medium text-zinc-400 uppercase tracking-widest mb-2"
+            >
+              Audio File
+            </label>
+            <div
+              className="flex items-center gap-3 w-full rounded-lg border border-zinc-700 bg-zinc-800 px-4 py-3 cursor-pointer hover:border-zinc-500 transition-colors"
+              onClick={() => inputRef.current?.click()}
+            >
+              {/* Icon */}
+              <svg className="w-5 h-5 text-zinc-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 18.75a6 6 0 006-6v-1.5m-6 7.5a6 6 0 01-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 01-3-3V4.5a3 3 0 116 0v8.25a3 3 0 01-3 3z" />
+              </svg>
 
-            {file && (
-              <span className="ml-auto text-xs text-zinc-500 shrink-0">
-                {(file.size / 1024 / 1024).toFixed(1)} MB
+              <span className={`text-sm truncate ${file ? "text-zinc-100" : "text-zinc-500"}`}>
+                {file ? file.name : "Click to select an audio file…"}
               </span>
+
+              {file && (
+                <span className="ml-auto text-xs text-zinc-500 shrink-0">
+                  {(file.size / 1024 / 1024).toFixed(1)} MB
+                </span>
+              )}
+            </div>
+
+            {/* Hidden native input */}
+            <input
+              ref={inputRef}
+              id="audio-file"
+              type="file"
+              accept="audio/*"
+              className="hidden"
+              onChange={handleFileChange}
+            />
+
+            <p className="mt-2 text-xs text-zinc-600">
+              MP3, MP4, WAV, M4A, OGG, WebM — max {MAX_SIZE_MB} MB
+            </p>
+          </div>
+        ) : (
+          <div className="mb-5 flex flex-col items-center justify-center p-8 border border-dashed border-zinc-700 rounded-xl bg-zinc-800/30">
+            {isRecording ? (
+              <div className="flex flex-col items-center gap-4">
+                <div className="relative flex items-center justify-center w-16 h-16">
+                  <div className="absolute w-full h-full rounded-full bg-red-500/20 animate-ping"></div>
+                  <div className="w-8 h-8 bg-red-500 rounded-full animate-pulse"></div>
+                </div>
+                <div className="text-3xl font-mono text-zinc-100">{formatTime(recordingTime)}</div>
+                <button onClick={stopRecording} className="mt-2 px-6 py-2 bg-red-600 hover:bg-red-500 rounded-full text-white text-sm font-semibold transition-colors shadow-lg">
+                  Stop Recording
+                </button>
+              </div>
+            ) : (
+              <div className="flex flex-col items-center gap-4">
+                <button onClick={startRecording} className="w-16 h-16 rounded-full bg-red-600 hover:bg-red-500 flex items-center justify-center transition-colors shadow-lg shadow-red-900/50">
+                   <svg className="w-8 h-8 text-white" fill="currentColor" viewBox="0 0 24 24"><path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/><path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/></svg>
+                </button>
+                <div className="text-sm text-zinc-400">Click to start recording</div>
+              </div>
+            )}
+            {file && !isRecording && (
+              <div className="mt-4 text-sm text-emerald-400 flex items-center gap-2">
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                </svg>
+                Recording saved. Ready to transcribe.
+              </div>
             )}
           </div>
-
-          {/* Hidden native input */}
-          <input
-            ref={inputRef}
-            id="audio-file"
-            type="file"
-            accept="audio/*"
-            className="hidden"
-            onChange={handleFileChange}
-          />
-
-          <p className="mt-2 text-xs text-zinc-600">
-            MP3, MP4, WAV, M4A, OGG, WebM — max {MAX_SIZE_MB} MB
-          </p>
-        </div>
+        )}
 
         {/* Error message */}
         {error && (
@@ -263,7 +457,22 @@ function parseSummary(data: unknown): SummaryOutput | null {
               Copy
             </button>
           </div>
-          <p className="text-sm text-zinc-300 leading-7 whitespace-pre-wrap">{transcript}</p>
+          
+          {utterances.length > 0 ? (
+            <div className="space-y-4 max-h-[400px] overflow-y-auto pr-2">
+              {utterances.map((utt, i) => (
+                <div key={i} className="flex flex-col gap-1">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[11px] font-bold text-indigo-400 uppercase tracking-wider">Speaker {utt.speaker}</span>
+                    <span className="text-[10px] text-zinc-500">{formatTimestamp(utt.start)}</span>
+                  </div>
+                  <p className="text-sm text-zinc-300 leading-6">{utt.text}</p>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm text-zinc-300 leading-7 whitespace-pre-wrap max-h-[400px] overflow-y-auto pr-2">{transcript}</p>
+          )}
         </div>
       )}
 
@@ -317,7 +526,11 @@ function parseSummary(data: unknown): SummaryOutput | null {
               <span className="w-2 h-2 rounded-full bg-indigo-500 inline-block" />
               <h2 className="text-xs font-semibold text-zinc-300 uppercase tracking-widest">AI Summary</h2>
             </div>
-            <span className="text-[11px] text-zinc-600 font-medium">Llama 3.1 8B</span>
+            <div className="flex items-center gap-3">
+              <button onClick={copyToClipboard} className="text-[11px] text-zinc-400 hover:text-indigo-400 font-medium transition-colors">Copy MD</button>
+              <button onClick={downloadMarkdown} className="text-[11px] text-zinc-400 hover:text-indigo-400 font-medium transition-colors">Download</button>
+              <span className="text-[11px] text-zinc-600 font-medium ml-2 border-l border-zinc-700 pl-3">Llama 3.1 8B</span>
+            </div>
           </div>
 
           {/* TL;DR */}
