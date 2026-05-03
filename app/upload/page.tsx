@@ -15,6 +15,13 @@ interface Utterance {
   end: number;
 }
 
+type OutputTab = "summary" | "transcript" | "chat";
+
+interface ChatMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
 const ACCEPTED_TYPES = ["audio/mpeg", "audio/mp4", "audio/wav", "audio/webm", "audio/x-m4a", "audio/ogg"];
 const MAX_SIZE_MB = 25;
 
@@ -33,6 +40,12 @@ export default function Home() {
   const timerIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   const [utterances, setUtterances] = useState<Utterance[]>([]);
+
+  // ─── Tab & Chat State ───────────────────────────────────────────────────────
+  const [activeOutputTab, setActiveOutputTab] = useState<OutputTab>("summary");
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [chatInput, setChatInput] = useState("");
+  const [isChatting, setIsChatting] = useState(false);
 
 // ─── Runtime shape validator ─────────────────────────────────────────────────
 // Coerces unknown API response into a safe SummaryOutput rather than a blind
@@ -207,20 +220,6 @@ function parseSummary(data: unknown): SummaryOutput | null {
     }
   }
 
-  function downloadMarkdown() {
-    const md = handleExportMarkdown();
-    if (!md) return;
-    const blob = new Blob([md], { type: "text/markdown" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `meeting_summary_${new Date().toISOString().slice(0,10)}.md`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  }
-
   function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const selected = e.target.files?.[0] ?? null;
     setError(null);
@@ -284,6 +283,7 @@ function parseSummary(data: unknown): SummaryOutput | null {
 
     // Chain summarization only if transcription succeeded
     if (transcriptText) {
+      setActiveOutputTab("summary");
       await callSummarize(transcriptText, extractedUtterances, file);
     }
   }
@@ -295,13 +295,77 @@ function parseSummary(data: unknown): SummaryOutput | null {
     setError(null);
     setSummary(null);
     setSummaryError(null);
+    setChatMessages([]);
+    setChatInput("");
+    setIsChatting(false);
+    setActiveOutputTab("summary");
     if (inputRef.current) inputRef.current.value = "";
     if (isRecording) stopRecording();
   }
 
+  async function handleSendMessage() {
+    if (!chatInput.trim() || !transcript) return;
+
+    const userMessage: ChatMessage = { role: "user", content: chatInput.trim() };
+    const newMessages = [...chatMessages, userMessage];
+    setChatMessages(newMessages);
+    setChatInput("");
+    setIsChatting(true);
+
+    try {
+      const res = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          transcript,
+          messages: newMessages,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to fetch response");
+      }
+
+      setChatMessages((prev) => [...prev, { role: "assistant", content: data.reply }]);
+    } catch (err) {
+      console.error(err);
+      setChatMessages((prev) => [...prev, { role: "assistant", content: "Sorry, I encountered an error. Please try again." }]);
+    } finally {
+      setIsChatting(false);
+    }
+  }
+
+  function downloadMarkdown() {
+    const md = handleExportMarkdown();
+    if (!md) return;
+    const blob = new Blob([md], { type: "text/markdown" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `meeting_summary_${new Date().toISOString().slice(0,10)}.md`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
   return (
-    <main className="min-h-screen bg-zinc-950 text-zinc-100 flex flex-col items-center justify-start px-4 py-16">
-      {/* Header */}
+    <div className="min-h-screen bg-zinc-950 text-zinc-100 flex flex-col">
+      {/* Navigation */}
+      <nav className="border-b border-zinc-800/50 bg-zinc-950/50 px-6 py-4 flex items-center justify-between sticky top-0 z-50 backdrop-blur-md">
+        <div className="flex items-center gap-2">
+          <span className="w-2 h-2 rounded-full bg-indigo-500 inline-block animate-pulse"></span>
+          <span className="text-zinc-100 font-bold text-lg tracking-tight">MeetMind</span>
+        </div>
+        <div className="flex items-center gap-6 text-sm font-medium">
+          <a href="/upload" className="text-zinc-400 hover:text-white transition-colors">Record</a>
+          <a href="/history" className="text-zinc-400 hover:text-white transition-colors">History</a>
+        </div>
+      </nav>
+
+      <main className="flex-1 flex flex-col items-center justify-start px-4 py-16">
+        {/* Header */}
       <div className="mb-10 text-center">
         <h1 className="text-3xl font-semibold tracking-tight text-white">MeetMind</h1>
         <p className="mt-2 text-sm text-zinc-400">Upload a meeting recording and get an instant transcript.</p>
@@ -444,149 +508,246 @@ function parseSummary(data: unknown): SummaryOutput | null {
         </div>
       </div>
 
-      {/* Transcript Output */}
-      {transcript && (
-        <div className="w-full max-w-xl mt-6 bg-zinc-900 border border-zinc-800 rounded-2xl p-8 shadow-xl">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-xs font-medium text-zinc-400 uppercase tracking-widest">Transcript</h2>
+      {/* Outputs (Tabbed View) */}
+      {(transcript || summarizing) && (
+        <div className="w-full max-w-xl mt-6">
+          {/* Tab Bar */}
+          <div className="flex bg-zinc-950/50 rounded-lg p-1 mb-4 border border-zinc-800">
             <button
-              id="copy-btn"
-              onClick={() => navigator.clipboard.writeText(transcript)}
-              className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors"
+              onClick={() => setActiveOutputTab("summary")}
+              className={`flex-1 py-2 text-sm font-medium rounded-md transition-colors ${activeOutputTab === "summary" ? "bg-zinc-800 text-white shadow" : "text-zinc-500 hover:text-zinc-300"}`}
             >
-              Copy
+              Summary
+            </button>
+            <button
+              onClick={() => setActiveOutputTab("transcript")}
+              className={`flex-1 py-2 text-sm font-medium rounded-md transition-colors ${activeOutputTab === "transcript" ? "bg-zinc-800 text-white shadow" : "text-zinc-500 hover:text-zinc-300"}`}
+            >
+              Transcript
+            </button>
+            <button
+              onClick={() => setActiveOutputTab("chat")}
+              className={`flex-1 py-2 text-sm font-medium rounded-md transition-colors ${activeOutputTab === "chat" ? "bg-zinc-800 text-white shadow" : "text-zinc-500 hover:text-zinc-300"}`}
+            >
+              Ask AI
             </button>
           </div>
-          
-          {utterances.length > 0 ? (
-            <div className="space-y-4 max-h-[400px] overflow-y-auto pr-2">
-              {utterances.map((utt, i) => (
-                <div key={i} className="flex flex-col gap-1">
-                  <div className="flex items-center gap-2">
-                    <span className="text-[11px] font-bold text-indigo-400 uppercase tracking-wider">Speaker {utt.speaker}</span>
-                    <span className="text-[10px] text-zinc-500">{formatTimestamp(utt.start)}</span>
-                  </div>
-                  <p className="text-sm text-zinc-300 leading-6">{utt.text}</p>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <p className="text-sm text-zinc-300 leading-7 whitespace-pre-wrap max-h-[400px] overflow-y-auto pr-2">{transcript}</p>
-          )}
-        </div>
-      )}
 
-      {/* Summary — Loading skeleton */}
-      {summarizing && (
-        <div className="w-full max-w-xl mt-6 rounded-2xl overflow-hidden border border-zinc-800 shadow-2xl">
-          <div className="bg-zinc-900 px-6 py-4 flex items-center gap-2.5 border-b border-zinc-800">
-            <svg className="w-3.5 h-3.5 animate-spin text-indigo-400 shrink-0" viewBox="0 0 24 24" fill="none">
-              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-            </svg>
-            <span className="text-xs font-semibold text-zinc-400 uppercase tracking-widest">Generating Summary…</span>
-          </div>
-          <div className="bg-zinc-900 px-6 py-6 border-b border-zinc-800 space-y-2.5">
-            <div className="h-2.5 bg-zinc-800 rounded-full animate-pulse w-full" />
-            <div className="h-2.5 bg-zinc-800 rounded-full animate-pulse w-4/5" />
-          </div>
-          <div className="bg-zinc-900 px-6 py-5 border-b border-zinc-800 space-y-3">
-            {[...Array(3)].map((_, i) => (
-              <div key={i} className="flex items-center gap-3">
-                <div className="w-5 h-5 rounded-full bg-zinc-800 animate-pulse shrink-0" />
-                <div className="h-2.5 bg-zinc-800 rounded-full animate-pulse flex-1" style={{ width: `${75 + i * 8}%` }} />
-              </div>
-            ))}
-          </div>
-          <div className="bg-zinc-900 px-6 py-5 space-y-2">
-            {[...Array(2)].map((_, i) => (
-              <div key={i} className="h-12 rounded-lg bg-zinc-800/60 animate-pulse" />
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Summary — Error */}
-      {summaryError && !summarizing && (
-        <div className="w-full max-w-xl mt-6 flex items-start gap-3 rounded-2xl bg-red-950/40 border border-red-800/60 px-5 py-4 text-sm text-red-300">
-          <svg className="w-4 h-4 mt-0.5 shrink-0 text-red-400" fill="currentColor" viewBox="0 0 20 20">
-            <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
-          </svg>
-          <span>{summaryError}</span>
-        </div>
-      )}
-
-      {/* Summary — Output */}
-      {summary && !summarizing && (
-        <div id="summary-card" className="w-full max-w-xl mt-6 rounded-2xl overflow-hidden border border-zinc-800 shadow-2xl">
-
-          {/* Card header */}
-          <div className="bg-zinc-900 px-6 py-4 flex items-center justify-between border-b border-zinc-800">
-            <div className="flex items-center gap-2.5">
-              <span className="w-2 h-2 rounded-full bg-indigo-500 inline-block" />
-              <h2 className="text-xs font-semibold text-zinc-300 uppercase tracking-widest">AI Summary</h2>
-            </div>
-            <div className="flex items-center gap-3">
-              <button onClick={copyToClipboard} className="text-[11px] text-zinc-400 hover:text-indigo-400 font-medium transition-colors">Copy MD</button>
-              <button onClick={downloadMarkdown} className="text-[11px] text-zinc-400 hover:text-indigo-400 font-medium transition-colors">Download</button>
-              <span className="text-[11px] text-zinc-600 font-medium ml-2 border-l border-zinc-700 pl-3">Llama 3.1 8B</span>
-            </div>
-          </div>
-
-          {/* TL;DR */}
-          <div className="bg-gradient-to-br from-indigo-950/70 via-zinc-900 to-zinc-900 px-6 py-6 border-b border-zinc-800">
-            <p className="text-[10px] font-bold text-indigo-400 uppercase tracking-[0.18em] mb-3">TL;DR</p>
-            <p className="text-[15px] font-medium text-white leading-7">{summary.tldr}</p>
-          </div>
-
-          {/* Key Points */}
-          {(summary.keyPoints ?? []).length > 0 && (
-            <div className="bg-zinc-900 px-6 py-5 border-b border-zinc-800">
-              <div className="flex items-center gap-2 mb-4">
-                <svg className="w-3.5 h-3.5 text-zinc-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
-                </svg>
-                <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-[0.18em]">Key Points</p>
-              </div>
-              <ul className="space-y-3">
-                {(summary.keyPoints ?? []).map((point, i) => (
-                  <li key={i} className="flex items-start gap-3">
-                    <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-zinc-800 border border-zinc-700 text-[10px] font-bold text-zinc-400">
-                      {i + 1}
-                    </span>
-                    <p className="text-sm text-zinc-300 leading-6">{point}</p>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-
-          {/* Action Items */}
-          <div className="bg-zinc-900 px-6 py-5">
-            <div className="flex items-center gap-2 mb-4">
-              <svg className="w-3.5 h-3.5 text-zinc-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-              </svg>
-              <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-[0.18em]">Action Items</p>
-            </div>
-            {(summary.actionItems ?? []).length > 0 ? (
-              <ul className="space-y-2">
-                {(summary.actionItems ?? []).map((item, i) => (
-                  <li key={i} className="flex items-start gap-3 rounded-lg bg-zinc-800/60 border border-zinc-700/50 px-4 py-3">
-                    <svg className="w-4 h-4 mt-0.5 text-emerald-500 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+          {/* Content Areas */}
+          {activeOutputTab === "summary" && (
+            <>
+              {/* Summary — Loading skeleton */}
+              {summarizing && (
+                <div className="w-full rounded-2xl overflow-hidden border border-zinc-800 shadow-2xl">
+                  <div className="bg-zinc-900 px-6 py-4 flex items-center gap-2.5 border-b border-zinc-800">
+                    <svg className="w-3.5 h-3.5 animate-spin text-indigo-400 shrink-0" viewBox="0 0 24 24" fill="none">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                     </svg>
-                    <p className="text-sm text-zinc-300 leading-6">{item}</p>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p className="text-xs text-zinc-600 italic">No action items identified in this meeting.</p>
-            )}
-          </div>
+                    <span className="text-xs font-semibold text-zinc-400 uppercase tracking-widest">Generating Summary…</span>
+                  </div>
+                  <div className="bg-zinc-900 px-6 py-6 border-b border-zinc-800 space-y-2.5">
+                    <div className="h-2.5 bg-zinc-800 rounded-full animate-pulse w-full" />
+                    <div className="h-2.5 bg-zinc-800 rounded-full animate-pulse w-4/5" />
+                  </div>
+                  <div className="bg-zinc-900 px-6 py-5 border-b border-zinc-800 space-y-3">
+                    {[...Array(3)].map((_, i) => (
+                      <div key={i} className="flex items-center gap-3">
+                        <div className="w-5 h-5 rounded-full bg-zinc-800 animate-pulse shrink-0" />
+                        <div className="h-2.5 bg-zinc-800 rounded-full animate-pulse flex-1" style={{ width: `${75 + i * 8}%` }} />
+                      </div>
+                    ))}
+                  </div>
+                  <div className="bg-zinc-900 px-6 py-5 space-y-2">
+                    {[...Array(2)].map((_, i) => (
+                      <div key={i} className="h-12 rounded-lg bg-zinc-800/60 animate-pulse" />
+                    ))}
+                  </div>
+                </div>
+              )}
 
+              {/* Summary — Error */}
+              {summaryError && !summarizing && (
+                <div className="w-full flex items-start gap-3 rounded-2xl bg-red-950/40 border border-red-800/60 px-5 py-4 text-sm text-red-300">
+                  <svg className="w-4 h-4 mt-0.5 shrink-0 text-red-400" fill="currentColor" viewBox="0 0 20 20">
+                    <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                  </svg>
+                  <span>{summaryError}</span>
+                </div>
+              )}
+
+              {/* Summary — Output */}
+              {summary && !summarizing && (
+                <div id="summary-card" className="w-full rounded-2xl overflow-hidden border border-zinc-800 shadow-2xl">
+                  {/* Card header */}
+                  <div className="bg-zinc-900 px-6 py-4 flex items-center justify-between border-b border-zinc-800">
+                    <div className="flex items-center gap-2.5">
+                      <span className="w-2 h-2 rounded-full bg-indigo-500 inline-block" />
+                      <h2 className="text-xs font-semibold text-zinc-300 uppercase tracking-widest">AI Summary</h2>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <button onClick={copyToClipboard} className="text-[11px] text-zinc-400 hover:text-indigo-400 font-medium transition-colors">Copy MD</button>
+                      <button onClick={downloadMarkdown} className="text-[11px] text-zinc-400 hover:text-indigo-400 font-medium transition-colors">Download</button>
+                      <span className="text-[11px] text-zinc-600 font-medium ml-2 border-l border-zinc-700 pl-3">Llama 3.1 8B</span>
+                    </div>
+                  </div>
+
+                  {/* TL;DR */}
+                  <div className="bg-gradient-to-br from-indigo-950/70 via-zinc-900 to-zinc-900 px-6 py-6 border-b border-zinc-800">
+                    <p className="text-[10px] font-bold text-indigo-400 uppercase tracking-[0.18em] mb-3">TL;DR</p>
+                    <p className="text-[15px] font-medium text-white leading-7">{summary.tldr}</p>
+                  </div>
+
+                  {/* Key Points */}
+                  {(summary.keyPoints ?? []).length > 0 && (
+                    <div className="bg-zinc-900 px-6 py-5 border-b border-zinc-800">
+                      <div className="flex items-center gap-2 mb-4">
+                        <svg className="w-3.5 h-3.5 text-zinc-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+                        </svg>
+                        <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-[0.18em]">Key Points</p>
+                      </div>
+                      <ul className="space-y-3">
+                        {(summary.keyPoints ?? []).map((point, i) => (
+                          <li key={i} className="flex items-start gap-3">
+                            <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-zinc-800 border border-zinc-700 text-[10px] font-bold text-zinc-400">
+                              {i + 1}
+                            </span>
+                            <p className="text-sm text-zinc-300 leading-6">{point}</p>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  {/* Action Items */}
+                  <div className="bg-zinc-900 px-6 py-5">
+                    <div className="flex items-center gap-2 mb-4">
+                      <svg className="w-3.5 h-3.5 text-zinc-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                      </svg>
+                      <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-[0.18em]">Action Items</p>
+                    </div>
+                    {(summary.actionItems ?? []).length > 0 ? (
+                      <ul className="space-y-2">
+                        {(summary.actionItems ?? []).map((item, i) => (
+                          <li key={i} className="flex items-start gap-3 rounded-lg bg-zinc-800/60 border border-zinc-700/50 px-4 py-3">
+                            <svg className="w-4 h-4 mt-0.5 text-emerald-500 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                            </svg>
+                            <p className="text-sm text-zinc-300 leading-6">{item}</p>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="text-xs text-zinc-600 italic">No action items identified in this meeting.</p>
+                    )}
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+
+          {activeOutputTab === "transcript" && transcript && (
+            <div className="w-full bg-zinc-900 border border-zinc-800 rounded-2xl p-8 shadow-xl">
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-xs font-medium text-zinc-400 uppercase tracking-widest">Transcript</h2>
+                <button
+                  id="copy-btn"
+                  onClick={() => navigator.clipboard.writeText(transcript)}
+                  className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors"
+                >
+                  Copy
+                </button>
+              </div>
+              
+              {utterances.length > 0 ? (
+                <div className="space-y-4 max-h-[400px] overflow-y-auto pr-2">
+                  {utterances.map((utt, i) => (
+                    <div key={i} className="flex flex-col gap-1">
+                      <div className="flex items-center gap-2">
+                        <span className="text-[11px] font-bold text-indigo-400 uppercase tracking-wider">Speaker {utt.speaker}</span>
+                        <span className="text-[10px] text-zinc-500">{formatTimestamp(utt.start)}</span>
+                      </div>
+                      <p className="text-sm text-zinc-300 leading-6">{utt.text}</p>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-sm text-zinc-300 leading-7 whitespace-pre-wrap max-h-[400px] overflow-y-auto pr-2">{transcript}</p>
+              )}
+            </div>
+          )}
+
+          {activeOutputTab === "chat" && transcript && (
+            <div className="w-full bg-zinc-900 border border-zinc-800 rounded-2xl overflow-hidden shadow-xl flex flex-col" style={{ height: '500px' }}>
+              {/* Chat Header */}
+              <div className="bg-zinc-900 px-6 py-4 flex items-center justify-between border-b border-zinc-800 shrink-0">
+                <div className="flex items-center gap-2.5">
+                  <span className="w-2 h-2 rounded-full bg-indigo-500 inline-block animate-pulse" />
+                  <h2 className="text-xs font-semibold text-zinc-300 uppercase tracking-widest">Ask AI</h2>
+                </div>
+                <span className="text-[11px] text-zinc-600 font-medium">Llama 3.1 8B</span>
+              </div>
+              
+              {/* Messages Area */}
+              <div className="flex-1 overflow-y-auto p-6 space-y-4">
+                {chatMessages.length === 0 ? (
+                  <div className="h-full flex flex-col items-center justify-center text-center space-y-3 opacity-50">
+                    <svg className="w-10 h-10 text-zinc-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+                    </svg>
+                    <p className="text-sm text-zinc-400">Ask any question about your meeting.</p>
+                  </div>
+                ) : (
+                  chatMessages.map((msg, i) => (
+                    <div key={i} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
+                      <div className={`max-w-[85%] rounded-2xl px-5 py-3 text-sm leading-relaxed ${msg.role === "user" ? "bg-indigo-600 text-white rounded-br-none" : "bg-zinc-800 text-zinc-300 border border-zinc-700/50 rounded-bl-none"}`}>
+                        {msg.content}
+                      </div>
+                    </div>
+                  ))
+                )}
+                {isChatting && (
+                  <div className="flex justify-start">
+                    <div className="bg-zinc-800 text-zinc-300 border border-zinc-700/50 rounded-2xl rounded-bl-none px-5 py-4 flex items-center gap-2">
+                      <span className="w-1.5 h-1.5 bg-zinc-500 rounded-full animate-bounce"></span>
+                      <span className="w-1.5 h-1.5 bg-zinc-500 rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></span>
+                      <span className="w-1.5 h-1.5 bg-zinc-500 rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></span>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Input Area */}
+              <div className="p-4 bg-zinc-900 border-t border-zinc-800 shrink-0">
+                <form 
+                  onSubmit={(e) => { e.preventDefault(); handleSendMessage(); }}
+                  className="flex items-center gap-3 relative"
+                >
+                  <input
+                    type="text"
+                    value={chatInput}
+                    onChange={(e) => setChatInput(e.target.value)}
+                    placeholder="Ask about key decisions..."
+                    className="w-full rounded-xl border border-zinc-700 bg-zinc-800 px-4 py-3 text-sm text-zinc-100 placeholder-zinc-500 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 transition-colors"
+                  />
+                  <button 
+                    type="submit" 
+                    disabled={isChatting || !chatInput.trim()}
+                    className="absolute right-2 p-2 text-indigo-400 hover:text-indigo-300 hover:bg-indigo-400/10 rounded-lg transition-colors disabled:opacity-50 disabled:hover:bg-transparent"
+                  >
+                    <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
+                    </svg>
+                  </button>
+                </form>
+              </div>
+            </div>
+          )}
         </div>
       )}
-    </main>
+      </main>
+    </div>
   );
 }

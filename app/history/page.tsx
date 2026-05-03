@@ -61,9 +61,22 @@ export default function HistoryPage() {
   }
 
   return (
-    <main className="min-h-screen bg-zinc-950 text-zinc-100 px-4 py-16">
-      <div className="max-w-4xl mx-auto">
-        {/* Header */}
+    <div className="min-h-screen bg-zinc-950 text-zinc-100 flex flex-col">
+      {/* Navigation */}
+      <nav className="border-b border-zinc-800/50 bg-zinc-950/50 px-6 py-4 flex items-center justify-between sticky top-0 z-50 backdrop-blur-md">
+        <div className="flex items-center gap-2">
+          <span className="w-2 h-2 rounded-full bg-indigo-500 inline-block animate-pulse"></span>
+          <span className="text-zinc-100 font-bold text-lg tracking-tight">MeetMind</span>
+        </div>
+        <div className="flex items-center gap-6 text-sm font-medium">
+          <a href="/upload" className="text-zinc-400 hover:text-white transition-colors">Record</a>
+          <a href="/history" className="text-zinc-400 hover:text-white transition-colors">History</a>
+        </div>
+      </nav>
+
+      <main className="flex-1 px-4 py-16">
+        <div className="max-w-4xl mx-auto">
+          {/* Header */}
         <div className="flex flex-col md:flex-row md:items-center justify-between mb-10 gap-4">
           <div>
             <h1 className="text-3xl font-semibold tracking-tight text-white">Meeting History</h1>
@@ -194,7 +207,8 @@ export default function HistoryPage() {
             ))}
           </div>
         )}
-      </div>
-    </main>
+        </div>
+      </main>
+    </div>
   );
 }
