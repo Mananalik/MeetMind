@@ -140,12 +140,27 @@ export default function HistoryPage() {
             </svg>
           </div>
         ) : meetings.length === 0 ? (
-          <div className="text-center py-20 bg-zinc-900/30 rounded-2xl border border-dashed border-zinc-800">
-            <svg className="mx-auto h-12 w-12 text-zinc-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 002-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
-            </svg>
-            <h3 className="mt-4 text-sm font-medium text-zinc-300">No meetings found</h3>
-            <p className="mt-1 text-sm text-zinc-500">Get started by recording or uploading a new meeting.</p>
+          <div className="text-center py-20 px-6 bg-zinc-900/30 rounded-2xl border border-dashed border-zinc-800">
+            <div className="mx-auto w-16 h-16 bg-zinc-800/50 rounded-full flex items-center justify-center mb-4">
+              <svg className="h-8 w-8 text-zinc-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 002-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+              </svg>
+            </div>
+            <h3 className="text-base font-medium text-zinc-200">No meetings yet</h3>
+            <p className="mt-2 text-sm text-zinc-400 max-w-sm mx-auto leading-relaxed">
+              Your meeting history will appear here. Head over to the dashboard to upload or record your first audio.
+            </p>
+            <div className="mt-8">
+              <Link
+                href="/upload"
+                className="inline-flex items-center gap-2 rounded-full bg-zinc-800 px-6 py-2.5 text-sm font-medium text-white hover:bg-zinc-700 hover:text-white transition-colors"
+              >
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
+                </svg>
+                New Meeting
+              </Link>
+            </div>
           </div>
         ) : (
           <div className="grid gap-6">

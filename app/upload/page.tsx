@@ -829,11 +829,36 @@ function parseSummary(data: unknown): SummaryOutput | null {
               {/* Messages Area */}
               <div className="flex-1 overflow-y-auto p-6 space-y-4">
                 {chatMessages.length === 0 ? (
-                  <div className="h-full flex flex-col items-center justify-center text-center space-y-3 opacity-50">
-                    <svg className="w-10 h-10 text-zinc-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
-                    </svg>
-                    <p className="text-sm text-zinc-400">Ask any question about your meeting.</p>
+                  <div className="h-full flex flex-col items-center justify-center text-center space-y-6 opacity-70">
+                    <div className="bg-zinc-800/50 p-4 rounded-full">
+                      <svg className="w-8 h-8 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+                      </svg>
+                    </div>
+                    <div>
+                      <p className="text-sm font-medium text-zinc-300 mb-1">Ask questions about your meeting</p>
+                      <p className="text-xs text-zinc-500">I will answer strictly using facts from the transcript.</p>
+                    </div>
+                    <div className="flex flex-wrap justify-center gap-2 max-w-[80%] pt-2">
+                      <button 
+                        onClick={() => setChatInput("What were the main decisions made?")}
+                        className="px-3 py-1.5 rounded-full border border-zinc-700 bg-zinc-800/40 text-xs text-zinc-300 hover:bg-zinc-700 hover:text-white transition-colors"
+                      >
+                        Main decisions?
+                      </button>
+                      <button 
+                        onClick={() => setChatInput("Are there any blockers mentioned?")}
+                        className="px-3 py-1.5 rounded-full border border-zinc-700 bg-zinc-800/40 text-xs text-zinc-300 hover:bg-zinc-700 hover:text-white transition-colors"
+                      >
+                        Any blockers?
+                      </button>
+                      <button 
+                        onClick={() => setChatInput("Who is responsible for the next steps?")}
+                        className="px-3 py-1.5 rounded-full border border-zinc-700 bg-zinc-800/40 text-xs text-zinc-300 hover:bg-zinc-700 hover:text-white transition-colors"
+                      >
+                        Who is responsible?
+                      </button>
+                    </div>
                   </div>
                 ) : (
                   chatMessages.map((msg, i) => (
@@ -865,7 +890,13 @@ function parseSummary(data: unknown): SummaryOutput | null {
                     type="text"
                     value={chatInput}
                     onChange={(e) => setChatInput(e.target.value)}
-                    placeholder="Ask about key decisions..."
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && !e.shiftKey) {
+                        e.preventDefault();
+                        if (!isChatting && chatInput.trim()) handleSendMessage();
+                      }
+                    }}
+                    placeholder="Ask about key decisions... (Press Enter to send)"
                     className="w-full rounded-xl border border-zinc-700 bg-zinc-800 px-4 py-3 text-sm text-zinc-100 placeholder-zinc-500 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 transition-colors"
                   />
                   <button 
