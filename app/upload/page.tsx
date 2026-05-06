@@ -89,7 +89,7 @@ function parseSummary(data: unknown): SummaryOutput | null {
   const abortControllerRef = useRef<AbortController | null>(null);
 
   // ── Summarize ────────────────────────────────────────────────
-  async function callSummarize(text: string, currentUtts: Utterance[], currentFile: File | null) {
+  async function callSummarize(text: string, currentUtts: Utterance[], currentFile: File | null, mode: "standard" | "brief" | "action-focused" = "standard") {
     setSummarizing(true);
     setSummaryError(null);
     setSummary(null);
@@ -100,7 +100,7 @@ function parseSummary(data: unknown): SummaryOutput | null {
       const res = await fetch("/api/summarize", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ transcript: text }),
+        body: JSON.stringify({ transcript: text, mode }),
         signal: abortControllerRef.current.signal,
       });
 
@@ -681,15 +681,25 @@ function parseSummary(data: unknown): SummaryOutput | null {
               {summary && !summarizing && (
                 <div id="summary-card" className="w-full rounded-2xl overflow-hidden border border-zinc-800 shadow-2xl">
                   {/* Card header */}
-                  <div className="bg-zinc-900 px-6 py-4 flex items-center justify-between border-b border-zinc-800">
-                    <div className="flex items-center gap-2.5">
-                      <span className="w-2 h-2 rounded-full bg-indigo-500 inline-block" />
-                      <h2 className="text-xs font-semibold text-zinc-300 uppercase tracking-widest">AI Summary</h2>
+                  <div className="bg-zinc-900 px-6 py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-zinc-800">
+                    <div className="flex items-center justify-between w-full sm:w-auto">
+                      <div className="flex items-center gap-2.5">
+                        <span className="w-2 h-2 rounded-full bg-indigo-500 inline-block" />
+                        <h2 className="text-xs font-semibold text-zinc-300 uppercase tracking-widest">AI Summary</h2>
+                      </div>
+                      <span className="text-[10px] text-zinc-500 font-medium sm:hidden">Llama 3.1 8B</span>
                     </div>
-                    <div className="flex items-center gap-3">
-                      <button onClick={copyToClipboard} className="text-[11px] text-zinc-400 hover:text-indigo-400 font-medium transition-colors">Copy MD</button>
-                      <button onClick={downloadMarkdown} className="text-[11px] text-zinc-400 hover:text-indigo-400 font-medium transition-colors">Download</button>
-                      <span className="text-[11px] text-zinc-600 font-medium ml-2 border-l border-zinc-700 pl-3">Llama 3.1 8B</span>
+                    
+                    <div className="flex items-center gap-2 overflow-x-auto pb-1 sm:pb-0 scrollbar-hide">
+                      <div className="flex items-center gap-1 bg-zinc-950/50 rounded-md p-1 border border-zinc-800 shrink-0">
+                        <button onClick={() => transcript && callSummarize(transcript, utterances, file, "brief")} className="px-2 py-1 text-[10px] text-zinc-400 hover:text-white hover:bg-zinc-800 rounded transition-colors font-medium">Briefer</button>
+                        <button onClick={() => transcript && callSummarize(transcript, utterances, file, "action-focused")} className="px-2 py-1 text-[10px] text-zinc-400 hover:text-white hover:bg-zinc-800 rounded transition-colors font-medium">More Actions</button>
+                        <button onClick={() => transcript && callSummarize(transcript, utterances, file, "standard")} className="px-2 py-1 text-[10px] text-zinc-400 hover:text-white hover:bg-zinc-800 rounded transition-colors font-medium">Standard</button>
+                      </div>
+                      <div className="h-4 w-px bg-zinc-800 shrink-0"></div>
+                      <button onClick={copyToClipboard} className="text-[11px] text-zinc-400 hover:text-indigo-400 font-medium transition-colors shrink-0">Copy MD</button>
+                      <button onClick={downloadMarkdown} className="text-[11px] text-zinc-400 hover:text-indigo-400 font-medium transition-colors shrink-0">Download</button>
+                      <span className="hidden sm:inline text-[10px] text-zinc-600 font-medium ml-1 border-l border-zinc-800 pl-2 shrink-0">Llama 3.1 8B</span>
                     </div>
                   </div>
 

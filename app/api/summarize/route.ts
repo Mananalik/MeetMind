@@ -1,10 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
+import { auth } from "@clerk/nextjs/server";
 import Groq from "groq-sdk";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 interface SummarizeRequestBody {
   transcript: string;
+  mode?: "standard" | "brief" | "action-focused";
 }
 
 interface SummaryOutput {
@@ -74,6 +76,8 @@ const MAX_TRANSCRIPT_LENGTH = 100_000; // ~75k tokens safety buffer
 // ─── Route handler ────────────────────────────────────────────────────────────
 
 export async function POST(req: NextRequest) {
+  await auth.protect();
+
   // --- Parse request body ---
   let body: SummarizeRequestBody;
 
@@ -86,7 +90,14 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const { transcript } = body;
+  const { transcript, mode = "standard" } = body;
+
+  let finalPrompt = SYSTEM_PROMPT;
+  if (mode === "brief") {
+     finalPrompt += "\n\nCRITICAL MODIFIER (BRIEF MODE): Keep the output extremely brief. The TLDR must be exactly 1 short sentence. Key points must be limited to at most 3 items, very condensed.";
+  } else if (mode === "action-focused") {
+     finalPrompt += "\n\nCRITICAL MODIFIER (ACTION MODE): Focus heavily on making the summary actionable. Maximize the detail in actionItems. Extract every single next step or implied task.";
+  }
 
   // --- Validate transcript ---
   if (!transcript || typeof transcript !== "string") {
@@ -122,7 +133,7 @@ export async function POST(req: NextRequest) {
       max_tokens: 1024,
       response_format: { type: "json_object" }, // Enforces strict JSON output
       messages: [
-        { role: "system", content: SYSTEM_PROMPT },
+        { role: "system", content: finalPrompt },
         {
           role: "user",
           content: `Here is the meeting transcript:\n\n${trimmed}`,
