@@ -36,6 +36,17 @@ body {
   scrollbar-width: none;  /* Firefox */
 }
 
+/* Ensure all interactive elements have a hand cursor */
+button, 
+a, 
+[role="button"],
+select,
+input[type="button"],
+input[type="submit"],
+input[type="reset"] {
+  cursor: pointer;
+}
+
 @keyframes shimmer {
   0% { transform: translateX(-100%); }
   100% { transform: translateX(100%); }
