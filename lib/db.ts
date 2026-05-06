@@ -73,6 +73,11 @@ export async function deleteMeeting(id: number): Promise<void> {
   return db.meetings.delete(id);
 }
 
+/** Update a meeting's title */
+export async function updateMeetingTitle(id: number, newTitle: string): Promise<number> {
+  return db.meetings.update(id, { title: newTitle });
+}
+
 /** Generate an auto title from the first utterance text */
 export function generateTitle(transcript: string, fileName: string): string {
   const firstSentence = transcript.split(/[.!?]/)[0]?.trim();

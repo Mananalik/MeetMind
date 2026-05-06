@@ -2,13 +2,17 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { getAllMeetings, searchMeetings, deleteMeeting, Meeting } from "@/lib/db";
+import { UserButton } from "@clerk/nextjs";
+import { getAllMeetings, searchMeetings, deleteMeeting, updateMeetingTitle, Meeting } from "@/lib/db";
 
 export default function HistoryPage() {
   const [meetings, setMeetings] = useState<Meeting[]>([]);
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [expandedId, setExpandedId] = useState<number | null>(null);
+  
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editTitle, setEditTitle] = useState("");
 
   useEffect(() => {
     loadMeetings();
@@ -50,6 +54,23 @@ export default function HistoryPage() {
     }
   }
 
+  async function handleRename(e: React.FormEvent, id: number) {
+    e.preventDefault();
+    if (!editTitle.trim()) {
+      setEditingId(null);
+      return;
+    }
+    await updateMeetingTitle(id, editTitle.trim());
+    setMeetings(meetings.map(m => m.id === id ? { ...m, title: editTitle.trim() } : m));
+    setEditingId(null);
+  }
+
+  function startEditing(e: React.MouseEvent, meeting: Meeting) {
+    e.stopPropagation();
+    setEditingId(meeting.id!);
+    setEditTitle(meeting.title);
+  }
+
   function formatDate(isoString: string) {
     return new Date(isoString).toLocaleDateString(undefined, {
       year: "numeric",
@@ -71,6 +92,8 @@ export default function HistoryPage() {
         <div className="flex items-center gap-6 text-sm font-medium">
           <a href="/upload" className="text-zinc-400 hover:text-white transition-colors">Record</a>
           <a href="/history" className="text-zinc-400 hover:text-white transition-colors">History</a>
+          <div className="h-4 w-px bg-zinc-800"></div>
+          <UserButton />
         </div>
       </nav>
 
@@ -134,11 +157,46 @@ export default function HistoryPage() {
               >
                 <div className="px-6 py-5 flex items-start justify-between">
                   <div className="flex-1 min-w-0 pr-4">
-                    <h2 className="text-lg font-semibold text-zinc-100 truncate">{meeting.title}</h2>
+                    {editingId === meeting.id ? (
+                      <form onSubmit={(e) => handleRename(e, meeting.id!)} onClick={(e) => e.stopPropagation()} className="mb-1">
+                        <input 
+                          type="text" 
+                          autoFocus
+                          value={editTitle}
+                          onChange={(e) => setEditTitle(e.target.value)}
+                          onBlur={(e) => handleRename(e as any, meeting.id!)}
+                          className="w-full text-lg font-semibold bg-zinc-950 border border-indigo-500/50 rounded-md px-2 py-0.5 text-white outline-none focus:ring-1 focus:ring-indigo-500"
+                        />
+                      </form>
+                    ) : (
+                      <div className="group/title flex items-center gap-2">
+                        <h2 className="text-lg font-semibold text-zinc-100 truncate">{meeting.title}</h2>
+                        <button 
+                          onClick={(e) => startEditing(e, meeting)}
+                          className="opacity-0 group-hover/title:opacity-100 p-1 text-zinc-500 hover:text-indigo-400 transition-colors"
+                          title="Rename meeting"
+                        >
+                          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                          </svg>
+                        </button>
+                      </div>
+                    )}
                     <div className="mt-1 flex items-center gap-3 text-xs text-zinc-500">
                       <span>{formatDate(meeting.date)}</span>
                       <span className="w-1 h-1 rounded-full bg-zinc-700"></span>
-                      <span className="truncate max-w-[200px]">{meeting.fileName}</span>
+                      <span className="truncate max-w-[200px]" title={meeting.fileName}>{meeting.fileName}</span>
+                      {meeting.summary?.actionItems && meeting.summary.actionItems.length > 0 && (
+                        <>
+                          <span className="w-1 h-1 rounded-full bg-zinc-700"></span>
+                          <span className="flex items-center gap-1 text-emerald-400">
+                            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                            </svg>
+                            {meeting.summary.actionItems.length} actions
+                          </span>
+                        </>
+                      )}
                     </div>
                     
                     {!expandedId || expandedId !== meeting.id ? (
@@ -148,15 +206,22 @@ export default function HistoryPage() {
                     ) : null}
                   </div>
                   
-                  <button 
-                    onClick={(e) => handleDelete(e, meeting.id!)}
-                    className="p-2 text-zinc-600 hover:text-red-400 hover:bg-red-400/10 rounded-lg transition-colors opacity-0 group-hover:opacity-100"
-                    title="Delete meeting"
-                  >
-                    <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                    </svg>
-                  </button>
+                  <div className="flex flex-col items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <button 
+                      onClick={(e) => handleDelete(e, meeting.id!)}
+                      className="p-2 text-zinc-500 hover:text-red-400 hover:bg-red-400/10 rounded-lg transition-colors"
+                      title="Delete meeting"
+                    >
+                      <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                      </svg>
+                    </button>
+                    {!expandedId || expandedId !== meeting.id ? (
+                       <svg className="w-5 h-5 text-zinc-600 mt-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19 9l-7 7-7-7" />
+                       </svg>
+                    ) : null}
+                  </div>
                 </div>
 
                 {/* Expanded State */}
