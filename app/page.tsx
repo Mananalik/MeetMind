@@ -1,6 +1,10 @@
 import Link from "next/link";
+import { SignInButton, SignUpButton } from "@clerk/nextjs";
+import { auth } from "@clerk/nextjs/server";
 
-export default function Home() {
+export default async function Home() {
+  const { userId } = await auth();
+
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100 flex flex-col selection:bg-indigo-500/30">
       
@@ -11,15 +15,29 @@ export default function Home() {
           <span className="text-zinc-100 font-bold text-xl tracking-tight">MeetMind</span>
         </div>
         <nav className="flex gap-6 items-center">
-          <Link href="/upload" className="text-sm font-medium text-zinc-300 hover:text-white transition-colors">Login</Link>
-          <Link href="/upload" className="px-4 py-2 rounded-full bg-white text-zinc-950 font-semibold text-sm hover:bg-zinc-200 transition-colors">
-            Get Started
-          </Link>
+          {!userId ? (
+            <>
+              <SignInButton mode="modal">
+                <button className="text-sm font-medium text-zinc-300 hover:text-white transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-950">
+                  Login
+                </button>
+              </SignInButton>
+              <SignUpButton mode="modal">
+                <button className="px-4 py-2 rounded-full bg-white text-zinc-950 font-semibold text-sm hover:bg-zinc-200 transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-950">
+                  Get Started
+                </button>
+              </SignUpButton>
+            </>
+          ) : (
+            <Link href="/upload" className="px-4 py-2 rounded-full bg-white text-zinc-950 font-semibold text-sm hover:bg-zinc-200 transition-colors">
+              Go to Dashboard
+            </Link>
+          )}
         </nav>
       </header>
 
       {/* Hero Section */}
-      <main className="flex-1 flex flex-col items-center justify-center relative px-6 pt-20 pb-32 text-center overflow-hidden">
+      <main className="flex-1 shrink-0 flex flex-col items-center justify-start relative px-6 pt-32 pb-56 text-center overflow-hidden min-h-[78vh]">
         {/* Background glow effects */}
         <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[800px] h-[600px] bg-indigo-600/20 blur-[120px] rounded-full pointer-events-none"></div>
         <div className="absolute top-0 w-full h-full bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-[0.03] mix-blend-overlay pointer-events-none"></div>
@@ -40,7 +58,7 @@ export default function Home() {
         <div className="mt-10 flex flex-col sm:flex-row gap-4 z-10 w-full sm:w-auto">
           <Link 
             href="/upload" 
-            className="flex items-center justify-center gap-2 px-8 py-4 rounded-full bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-lg transition-all shadow-[0_0_40px_8px_rgba(79,70,229,0.3)] hover:shadow-[0_0_60px_12px_rgba(79,70,229,0.4)] hover:-translate-y-0.5"
+            className="flex items-center justify-center gap-2 px-8 py-4 rounded-full bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-lg transition-all shadow-[0_0_40px_8px_rgba(79,70,229,0.3)] hover:shadow-[0_0_60px_12px_rgba(79,70,229,0.4)] hover:-translate-y-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-950"
           >
             <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
@@ -73,7 +91,7 @@ export default function Home() {
       </main>
 
       {/* Features Grid */}
-      <section className="bg-zinc-950 py-24 border-t border-zinc-900 relative z-10">
+      <section className="bg-zinc-950 pt-28 pb-24 border-t border-zinc-900 relative z-10 mt-6">
         <div className="max-w-6xl mx-auto px-6">
           <div className="text-center mb-16">
             <h2 className="text-3xl md:text-4xl font-bold text-white mb-4">Everything you need to stay focused.</h2>

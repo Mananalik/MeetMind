@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
+import { UserButton } from "@clerk/nextjs";
 
 interface SummaryOutput {
   tldr: string;
@@ -40,12 +41,26 @@ export default function Home() {
   const timerIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   const [utterances, setUtterances] = useState<Utterance[]>([]);
+  const [audioUrl, setAudioUrl] = useState<string | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
 
   // ─── Tab & Chat State ───────────────────────────────────────────────────────
   const [activeOutputTab, setActiveOutputTab] = useState<OutputTab>("summary");
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState("");
   const [isChatting, setIsChatting] = useState(false);
+
+  useEffect(() => {
+    if (!file) {
+      setAudioUrl(null);
+      return;
+    }
+    const url = URL.createObjectURL(file);
+    setAudioUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [file]);
 
 // ─── Runtime shape validator ─────────────────────────────────────────────────
 // Coerces unknown API response into a safe SummaryOutput rather than a blind
@@ -65,22 +80,28 @@ function parseSummary(data: unknown): SummaryOutput | null {
       : [],
   };
 }
-
+  const [processStep, setProcessStep] = useState<"idle" | "transcribing" | "summarizing" | "done">("idle");
 // ─── Summary state ────────────────────────────────────────────────────────────
   const [summary, setSummary] = useState<SummaryOutput | null>(null);
   const [summarizing, setSummarizing] = useState(false);
   const [summaryError, setSummaryError] = useState<string | null>(null);
+
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   // ── Summarize ────────────────────────────────────────────────
   async function callSummarize(text: string, currentUtts: Utterance[], currentFile: File | null) {
     setSummarizing(true);
     setSummaryError(null);
     setSummary(null);
+
+    abortControllerRef.current = new AbortController();
+
     try {
       const res = await fetch("/api/summarize", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ transcript: text }),
+        signal: abortControllerRef.current.signal,
       });
 
       let data: unknown;
@@ -118,11 +139,16 @@ function parseSummary(data: unknown): SummaryOutput | null {
           summary: parsed,
           createdAt: new Date(),
         });
-      } catch (err) {
+      } catch (err: any) {
         console.error("Failed to save meeting to database:", err);
       }
-    } catch {
+    } catch (err: any) {
+      if (err.name === "AbortError") {
+        console.log("Summarization aborted");
+        return; // handleCancelProcessing already handled UI state
+      }
       setSummaryError("Network error while summarizing. Please check your connection.");
+      setProcessStep("done"); // Still done transcribing so user can see it
     } finally {
       setSummarizing(false);
     }
@@ -187,6 +213,31 @@ function parseSummary(data: unknown): SummaryOutput | null {
     return `${m}:${s}`;
   }
 
+  function formatSeconds(seconds: number) {
+    if (!Number.isFinite(seconds) || seconds <= 0) return "00:00";
+    const m = Math.floor(seconds / 60).toString().padStart(2, "0");
+    const s = Math.floor(seconds % 60).toString().padStart(2, "0");
+    return `${m}:${s}`;
+  }
+
+  function handleSeek(ms: number) {
+    if (!audioRef.current) return;
+    audioRef.current.currentTime = ms / 1000;
+    audioRef.current.play().catch(() => undefined);
+  }
+
+  function getSpeakerColor(speaker: string) {
+    const palette = [
+      "bg-indigo-500/20 text-indigo-300 border-indigo-500/40",
+      "bg-cyan-500/20 text-cyan-300 border-cyan-500/40",
+      "bg-emerald-500/20 text-emerald-300 border-emerald-500/40",
+      "bg-amber-500/20 text-amber-300 border-amber-500/40",
+      "bg-rose-500/20 text-rose-300 border-rose-500/40",
+    ];
+    const code = speaker.charCodeAt(0) || 0;
+    return palette[code % palette.length];
+  }
+
   function handleExportMarkdown() {
     if (!summary) return null;
     
@@ -247,6 +298,7 @@ function parseSummary(data: unknown): SummaryOutput | null {
     if (!file) return;
 
     setLoading(true);
+    setProcessStep("transcribing");
     setError(null);
     setTranscript(null);
     setUtterances([]);
@@ -256,6 +308,8 @@ function parseSummary(data: unknown): SummaryOutput | null {
     let transcriptText: string | null = null;
     let extractedUtterances: Utterance[] = [];
 
+    abortControllerRef.current = new AbortController();
+
     try {
       const formData = new FormData();
       formData.append("file", file);
@@ -263,20 +317,27 @@ function parseSummary(data: unknown): SummaryOutput | null {
       const res = await fetch("/api/transcribe", {
         method: "POST",
         body: formData,
+        signal: abortControllerRef.current.signal,
       });
 
       const data = await res.json();
 
       if (!res.ok) {
         setError(data.error ?? "Transcription failed. Please try again.");
+        setProcessStep("idle");
         return;
       }
       transcriptText = data.transcript ?? "No transcript returned";
       extractedUtterances = data.utterances ?? [];
       setTranscript(transcriptText);
       setUtterances(extractedUtterances);
-    } catch {
+    } catch (err: any) {
+      if (err.name === "AbortError") {
+        console.log("Transcription aborted");
+        return; // handleCancelProcessing already set error and reset state
+      }
       setError("Network error. Please check your connection and try again.");
+      setProcessStep("idle");
     } finally {
       setLoading(false);
     }
@@ -284,8 +345,22 @@ function parseSummary(data: unknown): SummaryOutput | null {
     // Chain summarization only if transcription succeeded
     if (transcriptText) {
       setActiveOutputTab("summary");
+      setProcessStep("summarizing");
       await callSummarize(transcriptText, extractedUtterances, file);
+      setProcessStep("done");
+    } else {
+      setProcessStep("idle");
     }
+  }
+
+  function handleCancelProcessing() {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    setLoading(false);
+    setSummarizing(false);
+    setProcessStep("idle");
+    setError("Processing cancelled by user.");
   }
 
   function handleReset() {
@@ -299,6 +374,10 @@ function parseSummary(data: unknown): SummaryOutput | null {
     setChatInput("");
     setIsChatting(false);
     setActiveOutputTab("summary");
+    setProcessStep("idle");
+    setAudioUrl(null);
+    setCurrentTime(0);
+    setDuration(0);
     if (inputRef.current) inputRef.current.value = "";
     if (isRecording) stopRecording();
   }
@@ -361,6 +440,8 @@ function parseSummary(data: unknown): SummaryOutput | null {
         <div className="flex items-center gap-6 text-sm font-medium">
           <a href="/upload" className="text-zinc-400 hover:text-white transition-colors">Record</a>
           <a href="/history" className="text-zinc-400 hover:text-white transition-colors">History</a>
+          <div className="h-4 w-px bg-zinc-800"></div>
+          <UserButton />
         </div>
       </nav>
 
@@ -474,38 +555,58 @@ function parseSummary(data: unknown): SummaryOutput | null {
           </div>
         )}
 
-        {/* Action Buttons */}
-        <div className="flex gap-3">
-          <button
-            id="upload-btn"
-            onClick={handleUpload}
-            disabled={!file || loading}
-            className="flex-1 flex items-center justify-center gap-2 rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed"
-          >
-            {loading ? (
-              <>
-                {/* Spinner */}
-                <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                </svg>
-                Transcribing…
-              </>
-            ) : (
-              "Transcribe"
-            )}
-          </button>
-
-          {(file || transcript) && !loading && (
+        {/* Action Buttons & Stepper */}
+        {processStep !== "idle" && processStep !== "done" ? (
+          <div className="flex flex-col gap-4 bg-zinc-950/50 p-5 rounded-xl border border-zinc-800">
+            <h3 className="text-sm font-semibold text-zinc-200">
+              {processStep === "transcribing" ? "Processing audio..." : "Generating insights..."}
+            </h3>
+            <div className="flex items-center gap-3">
+              <div className="flex-1 h-2 rounded-full bg-zinc-800 overflow-hidden relative">
+                <div 
+                  className="absolute inset-y-0 left-0 bg-indigo-500 rounded-full transition-all duration-1000"
+                  style={{ width: processStep === "transcribing" ? "33%" : "80%" }}
+                />
+                <div className="absolute inset-y-0 w-full animate-[shimmer_2s_infinite] bg-gradient-to-r from-transparent via-white/20 to-transparent" />
+              </div>
+              <span className="text-xs text-zinc-400 font-mono">
+                {processStep === "transcribing" ? "~1m" : "~10s"}
+              </span>
+            </div>
+            <div className="flex justify-between text-xs text-zinc-500 font-medium px-1 mt-1">
+              <span className={processStep === "transcribing" ? "text-indigo-400" : "text-emerald-500"}>1. Transcribe</span>
+              <span className={processStep === "summarizing" ? "text-indigo-400" : ""}>2. Summarize</span>
+            </div>
+            
             <button
-              id="reset-btn"
-              onClick={handleReset}
-              className="rounded-lg border border-zinc-700 px-4 py-2.5 text-sm text-zinc-400 hover:text-zinc-200 hover:border-zinc-500 transition-colors"
+              onClick={handleCancelProcessing}
+              className="mt-2 text-xs text-zinc-500 hover:text-zinc-300 self-center"
             >
-              Reset
+              Cancel Processing
             </button>
-          )}
-        </div>
+          </div>
+        ) : (
+          <div className="flex gap-3">
+            <button
+              id="upload-btn"
+              onClick={handleUpload}
+              disabled={!file || loading}
+              className="flex-1 flex items-center justify-center gap-2 rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              {loading ? "Transcribing…" : "Transcribe"}
+            </button>
+
+            {(file || transcript) && !loading && (
+              <button
+                id="reset-btn"
+                onClick={handleReset}
+                className="rounded-lg border border-zinc-700 px-4 py-2.5 text-sm text-zinc-400 hover:text-zinc-200 hover:border-zinc-500 transition-colors"
+              >
+                Reset
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Outputs (Tabbed View) */}
@@ -660,17 +761,42 @@ function parseSummary(data: unknown): SummaryOutput | null {
                   Copy
                 </button>
               </div>
+
+              {audioUrl && (
+                <div className="mb-6 rounded-xl border border-zinc-800 bg-zinc-950/40 px-4 py-3">
+                  <div className="flex items-center gap-4">
+                    <audio
+                      ref={audioRef}
+                      src={audioUrl}
+                      controls
+                      className="w-full"
+                      onTimeUpdate={() => setCurrentTime(audioRef.current?.currentTime ?? 0)}
+                      onLoadedMetadata={() => setDuration(audioRef.current?.duration ?? 0)}
+                    />
+                  </div>
+                  <div className="mt-2 flex items-center justify-between text-[11px] text-zinc-500">
+                    <span>{formatSeconds(currentTime)} / {formatSeconds(duration)}</span>
+                    <span>Click a speaker line to jump</span>
+                  </div>
+                </div>
+              )}
               
               {utterances.length > 0 ? (
                 <div className="space-y-4 max-h-[400px] overflow-y-auto pr-2">
                   {utterances.map((utt, i) => (
-                    <div key={i} className="flex flex-col gap-1">
+                    <button
+                      key={i}
+                      onClick={() => handleSeek(utt.start)}
+                      className="w-full text-left flex flex-col gap-1 rounded-lg border border-transparent hover:border-zinc-700 hover:bg-zinc-950/40 transition-colors px-3 py-2"
+                    >
                       <div className="flex items-center gap-2">
-                        <span className="text-[11px] font-bold text-indigo-400 uppercase tracking-wider">Speaker {utt.speaker}</span>
+                        <span className={`text-[11px] font-bold uppercase tracking-wider rounded-full border px-2 py-0.5 ${getSpeakerColor(utt.speaker)}`}>
+                          Speaker {utt.speaker}
+                        </span>
                         <span className="text-[10px] text-zinc-500">{formatTimestamp(utt.start)}</span>
                       </div>
                       <p className="text-sm text-zinc-300 leading-6">{utt.text}</p>
-                    </div>
+                    </button>
                   ))}
                 </div>
               ) : (
